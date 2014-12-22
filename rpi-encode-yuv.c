@@ -1,6 +1,6 @@
 /*
  * Copyright © 2013 Tuomas Jormola <tj@solitudo.net> <http://solitudo.net>
- *
+/ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -49,10 +49,10 @@
 #include <IL/OMX_Broadcom.h>
 
 // Hard coded parameters
-#define VIDEO_WIDTH                     1920 / 4
-#define VIDEO_HEIGHT                    1080 / 4
-#define VIDEO_FRAMERATE                 25
-#define VIDEO_BITRATE                   10000000
+#define VIDEO_WIDTH                     480
+#define VIDEO_HEIGHT                    320
+#define VIDEO_FRAMERATE                 30
+#define VIDEO_BITRATE                   240000
 
 // Dunno where this is originally stolen from...
 #define OMX_INIT_STRUCTURE(a) \
@@ -66,6 +66,9 @@
 
 // Global variable used by the signal handler and encoding loop
 static int want_quit = 0;
+
+// Global variable to indicate the amount of logging
+static int quiet = 0;
 
 // Our application context passed around
 // the main routine and callback handlers
@@ -118,20 +121,25 @@ static void get_i420_frame_info(int width, int height, int buf_stride, int buf_s
 
 // Ugly, stupid utility functions
 static void say(const char* message, ...) {
-    va_list args;
-    char str[1024];
-    memset(str, 0, sizeof(str));
-    va_start(args, message);
-    vsnprintf(str, sizeof(str) - 1, message, args);
-    va_end(args);
-    size_t str_len = strnlen(str, sizeof(str));
-    if(str[str_len - 1] != '\n') {
-        str[str_len] = '\n';
+
+    if (!quiet)
+    {
+        va_list args;
+        char str[1024];
+        memset(str, 0, sizeof(str));
+        va_start(args, message);
+        vsnprintf(str, sizeof(str) - 1, message, args);
+        va_end(args);
+        size_t str_len = strnlen(str, sizeof(str));
+        if(str[str_len - 1] != '\n') {
+            str[str_len] = '\n';
+       }
+       fprintf(stderr, str);
     }
-    fprintf(stderr, str);
 }
 
 static void die(const char* message, ...) {
+
     va_list args;
     char str[1024];
     memset(str, 0, sizeof(str));
@@ -180,6 +188,7 @@ static void dump_frame_info(const char *message, const i420_frame_info *info) {
             info->p_offset[0], info->p_offset[1], info->p_offset[2]);
 }
 
+#if 0
 static void dump_event(OMX_HANDLETYPE hComponent, OMX_EVENTTYPE eEvent, OMX_U32 nData1, OMX_U32 nData2) {
     char *e;
     switch(eEvent) {
@@ -194,6 +203,7 @@ static void dump_event(OMX_HANDLETYPE hComponent, OMX_EVENTTYPE eEvent, OMX_U32 
     say("Received event 0x%08x %s, hComponent:0x%08x, nData1:0x%08x, nData2:0x%08x",
             eEvent, e, hComponent, nData1, nData2);
 }
+#endif
 
 static const char* dump_compression_format(OMX_VIDEO_CODINGTYPE c) {
     char *f;
@@ -471,7 +481,7 @@ static OMX_ERRORTYPE event_handler(
         OMX_U32 nData2,
         OMX_PTR pEventData) {
 
-    dump_event(hComponent, eEvent, nData1, nData2);
+    //dump_event(hComponent, eEvent, nData1, nData2);
 
     appctx *ctx = (appctx *)pAppData;
 
@@ -526,6 +536,36 @@ int main(int argc, char **argv) {
 
     OMX_ERRORTYPE r;
 
+    int width = VIDEO_WIDTH;
+    int height = VIDEO_HEIGHT;
+    int fps = VIDEO_FRAMERATE;
+    int bit_rate = VIDEO_BITRATE;
+    int opt;
+
+
+    while ((opt = getopt (argc, argv, "w:h:b:f:q")) != -1)
+    switch (opt)
+    {
+    case 'w':
+        width = atoi(optarg);
+        break;
+    case 'h':
+        height = atoi(optarg);
+        break;
+    case 'b':
+        bit_rate = atoi(optarg);
+        break;
+    case 'f':
+        fps = atoi(optarg);
+        break;
+    case 'q':
+         quiet = 1;
+         break;
+    default:
+        fprintf(stderr, "Usage: %s [-w with -h height -b bitate -f framerate] ", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
     if((r = OMX_Init()) != OMX_ErrorNone) {
         omx_die(r, "OMX initalization failed");
     }
@@ -559,9 +599,9 @@ int main(int argc, char **argv) {
     if((r = OMX_GetParameter(ctx.encoder, OMX_IndexParamPortDefinition, &encoder_portdef)) != OMX_ErrorNone) {
         omx_die(r, "Failed to get port definition for encoder input port 200");
     }
-    encoder_portdef.format.video.nFrameWidth  = VIDEO_WIDTH;
-    encoder_portdef.format.video.nFrameHeight = VIDEO_HEIGHT;
-    encoder_portdef.format.video.xFramerate   = VIDEO_FRAMERATE << 16;
+    encoder_portdef.format.video.nFrameWidth  = width;
+    encoder_portdef.format.video.nFrameHeight = height;
+    encoder_portdef.format.video.xFramerate   = fps << 16;
     // Stolen from gstomxvideodec.c of gst-omx
     encoder_portdef.format.video.nStride      = (encoder_portdef.format.video.nFrameWidth + encoder_portdef.nBufferAlignment - 1) & (~(encoder_portdef.nBufferAlignment - 1));
     encoder_portdef.format.video.eColorFormat = OMX_COLOR_FormatYUV420PackedPlanar;
@@ -579,7 +619,7 @@ int main(int argc, char **argv) {
     encoder_portdef.format.video.eColorFormat = OMX_COLOR_FormatUnused;
     encoder_portdef.format.video.eCompressionFormat = OMX_VIDEO_CodingAVC;
     // Which one is effective, this or the configuration just below?
-    encoder_portdef.format.video.nBitrate     = VIDEO_BITRATE;
+    encoder_portdef.format.video.nBitrate     = bit_rate;
     if((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamPortDefinition, &encoder_portdef)) != OMX_ErrorNone) {
         omx_die(r, "Failed to set port definition for encoder output port 201");
     }
@@ -703,7 +743,7 @@ int main(int argc, char **argv) {
             ctx.encoder_ppBuffer_in->nOffset = 0;
             ctx.encoder_ppBuffer_in->nFilledLen = (buf_info.size - frame_info.size) + input_total_read;
             frame_in++;
-            say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
+//            say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
             // Mark input unavailable also if the signal handler was triggered
             if(want_quit) {
                 input_available = 0;
@@ -726,7 +766,7 @@ int main(int argc, char **argv) {
             if(output_written != ctx.encoder_ppBuffer_out->nFilledLen) {
                 die("Failed to write to output file: %s", strerror(errno));
             }
-            say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
+//            say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
         }
         if(ctx.encoder_output_buffer_available || !frame_out) {
             // Buffer flushed, request a new buffer to be filled by the encoder component

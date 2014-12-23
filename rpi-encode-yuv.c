@@ -299,6 +299,46 @@ static const char* dump_color_format(OMX_COLOR_FORMATTYPE c) {
     }
 }
 
+const char *OmxProfileTypeToString(OMX_VIDEO_AVCPROFILETYPE omx_profile) 
+{ 
+    switch(omx_profile) 
+    { 
+        case OMX_VIDEO_AVCProfileBaseline:    return "Baseline"; 
+        case OMX_VIDEO_AVCProfileMain:        return "Main"; 
+        case OMX_VIDEO_AVCProfileExtended:    return "Extended"; 
+        case OMX_VIDEO_AVCProfileHigh:        return "High"; 
+        case OMX_VIDEO_AVCProfileHigh10:      return "High 10"; 
+        case OMX_VIDEO_AVCProfileHigh422:     return "High 422"; 
+        case OMX_VIDEO_AVCProfileHigh444:     return "High 444"; 
+        case OMX_VIDEO_AVCProfileConstrainedBaseline: return "Constrained Baseline";
+
+        default: return "Unknown"; 
+    } 
+}
+
+uint8_t OmxLevelTypeToH264Level(OMX_VIDEO_AVCLEVELTYPE omx_level) 
+{ 
+    switch(omx_level) 
+    { 
+        case OMX_VIDEO_AVCLevel1:   return 10;  /* 0x01,    Level 1 */ 
+        case OMX_VIDEO_AVCLevel11:  return 11;  /* 0x04,    Level 1.1 */ 
+        case OMX_VIDEO_AVCLevel12:  return 12;  /* 0x08,    Level 1.2 */ 
+        case OMX_VIDEO_AVCLevel13:  return 13;  /* 0x10,    Level 1.3 */ 
+        case OMX_VIDEO_AVCLevel2:   return 20;  /* 0x20,    Level 2 */ 
+        case OMX_VIDEO_AVCLevel21:  return 21;  /* 0x40,    Level 2.1 */ 
+        case OMX_VIDEO_AVCLevel22:  return 22;  /* 0x80,    Level 2.2 */ 
+        case OMX_VIDEO_AVCLevel3:   return 30;  /* 0x100,   Level 3 */ 
+        case OMX_VIDEO_AVCLevel31:  return 31;  /* 0x200,   Level 3.1 */ 
+        case OMX_VIDEO_AVCLevel32:  return 32;  /* 0x400,   Level 3.2 */ 
+        case OMX_VIDEO_AVCLevel4:   return 40;  /* 0x800,   Level 4 */ 
+        case OMX_VIDEO_AVCLevel41:  return 41;  /* 0x1000,  Level 4.1 */ 
+        case OMX_VIDEO_AVCLevel42:  return 42;  /* 0x2000,  Level 4.2 */ 
+        case OMX_VIDEO_AVCLevel5:   return 50;  /* 0x4000,  Level 5 */ 
+        case OMX_VIDEO_AVCLevel51:  return 51;  /* 0x8000,  Level 5.1 */ 
+        default:    return 0; 
+    } 
+} 
+
 static void dump_portdef(OMX_PARAM_PORTDEFINITIONTYPE* portdef) {
     say("Port %d is %s, %s, buffers wants:%d needs:%d, size:%d, pop:%d, aligned:%d",
         portdef->nPortIndex,
@@ -541,29 +581,38 @@ int main(int argc, char **argv) {
     int fps = VIDEO_FRAMERATE;
     int bit_rate = VIDEO_BITRATE;
     int opt;
+    int intra_refresh = -1;
+    int disable_cabac = 0;
 
-
-    while ((opt = getopt (argc, argv, "w:h:b:f:q")) != -1)
-    switch (opt)
+    while ((opt = getopt (argc, argv, "w:h:b:f:qi:d")) != -1)
     {
-    case 'w':
-        width = atoi(optarg);
-        break;
-    case 'h':
-        height = atoi(optarg);
-        break;
-    case 'b':
-        bit_rate = atoi(optarg);
-        break;
-    case 'f':
-        fps = atoi(optarg);
-        break;
-    case 'q':
-         quiet = 1;
-         break;
-    default:
-        fprintf(stderr, "Usage: %s [-w with -h height -b bitate -f framerate] ", argv[0]);
-        exit(EXIT_FAILURE);
+        switch (opt)
+        {
+        case 'w':
+            width = atoi(optarg);
+            break;
+        case 'h':
+            height = atoi(optarg);
+            break;
+        case 'b':
+            bit_rate = atoi(optarg);
+            break;
+        case 'f':
+            fps = atoi(optarg);
+            break;
+        case 'q':
+             quiet = 1;
+             break;
+        case 'i':
+             intra_refresh = atoi(optarg);
+             break;
+        case 'd':
+             disable_cabac = 1;
+             break;
+        default:
+            fprintf(stderr, "Usage: %s [-w width -h height -b bitate -f framerate -i Intra refresh rate -d disable CABAC] ", argv[0]);
+            exit(EXIT_FAILURE);
+        }
     }
 
     if((r = OMX_Init()) != OMX_ErrorNone) {
@@ -639,6 +688,56 @@ int main(int argc, char **argv) {
     format.eCompressionFormat = OMX_VIDEO_CodingAVC;
     if((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoPortFormat, &format)) != OMX_ErrorNone) {
         omx_die(r, "Failed to set video format for encoder output port 201");
+    }
+
+    // Configure idr rate
+    if (intra_refresh !=  -1)
+    {
+        OMX_PARAM_U32TYPE intra;
+        OMX_INIT_STRUCTURE(intra);
+        intra.nPortIndex = 201;
+        intra.nU32 = intra_refresh;
+        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexConfigBrcmVideoIntraPeriod, &intra)) != OMX_ErrorNone)
+            omx_die(r, "Failed to set video format for encoder output port 201");
+	   else
+	        say("jnah Successful intra set\n");
+    }
+
+#if 1
+    {
+        OMX_VIDEO_PARAM_PROFILELEVELTYPE param; 
+ 	    OMX_INIT_STRUCTURE(param); 
+     	param.nPortIndex = 201; 
+ 	
+        for(param.nProfileIndex = 0; ; ++param.nProfileIndex) 
+ 	    { 
+ 	        OMX_ERRORTYPE omx_error; 
+ 	        omx_error = OMX_GetParameter(ctx.encoder, OMX_IndexParamVideoProfileLevelQuerySupported, &param); 
+            if(omx_error != OMX_ErrorNone) 
+     	        break; 
+
+            say("Found valid Profile %s, level %d\n", OmxProfileTypeToString(param.eProfile), OmxLevelTypeToH264Level(param.eLevel));
+        }
+    }
+#endif
+
+
+    if (disable_cabac)
+    {
+        OMX_VIDEO_PARAM_PROFILELEVELTYPE profiletype;
+        OMX_INIT_STRUCTURE(profiletype);
+        profiletype.nPortIndex = 201;
+        profiletype.eProfile =  OMX_VIDEO_AVCProfileConstrainedBaseline;
+        profiletype.eLevel = OMX_VIDEO_AVCLevel4;
+        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoProfileLevelCurrent, &profiletype)) != OMX_ErrorNone)
+            omx_die(r, "Failed to set H264 profile for encoder output port 201");
+	   else
+	        say("jnah Successful H264 profile set\n");
+
+
+
+
+
     }
 
     // Switch components to idle state
@@ -743,7 +842,7 @@ int main(int argc, char **argv) {
             ctx.encoder_ppBuffer_in->nOffset = 0;
             ctx.encoder_ppBuffer_in->nFilledLen = (buf_info.size - frame_info.size) + input_total_read;
             frame_in++;
-//            say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
+           // say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
             // Mark input unavailable also if the signal handler was triggered
             if(want_quit) {
                 input_available = 0;
@@ -766,7 +865,7 @@ int main(int argc, char **argv) {
             if(output_written != ctx.encoder_ppBuffer_out->nFilledLen) {
                 die("Failed to write to output file: %s", strerror(errno));
             }
-//            say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
+           // say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
         }
         if(ctx.encoder_output_buffer_available || !frame_out) {
             // Buffer flushed, request a new buffer to be filled by the encoder component
@@ -778,7 +877,8 @@ int main(int argc, char **argv) {
         // Don't exit the loop until all the input frames have been encoded.
         // Out frame count is larger than in frame count because 2 header
         // frames are emitted in the beginning.
-        if(want_quit && frame_out == frame_in) {
+//        if(want_quit && frame_out == frame_in) {
+        if(want_quit || frame_out == frame_in) {
             break;
         }
         // Would be better to use signaling here but hey this works too

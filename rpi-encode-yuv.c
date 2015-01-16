@@ -396,6 +396,61 @@ static void dump_portdef(OMX_PARAM_PORTDEFINITIONTYPE* portdef) {
     }
 }
 
+
+static void dump_avc_parameters(OMX_VIDEO_PARAM_AVCTYPE parms)
+{
+   say ("AVC parameters :\n\t"
+        "Size %d\n\t"
+        "Version %d\n\t"
+        "Port %d\n\t"
+        "nBFrames %d\n\t"
+        "bUseHadamard %d\n\t"
+        "nRefFrames %d\n\t"
+        "nRefIdx10ActiveMinus1 %d\n\t"
+        "nRefIdx11ActiveMinus1 %d\n\t"
+        "bEnableUEP %d\n\t"
+        "bEnableFMO %d\n\t"
+        "bEnableASO %d\n\t"
+        "bEnableRS %d\n\t"
+        "eProfile %d\n\t"
+        "eLevel %d\n\t"
+        "nAllowedPictureTypes %d\n\t"
+        "bFramesMBsOnly %d\n\t"
+        "bMBAFF %d\n\t"
+        "bEntropyCodingCABAC %d\n\t"
+        "bWeightedPPrediction %d\n\t"
+        "nWeightedBipredicitonMode %d\n\t"
+        "bconstIpred %d\n\t"
+        "bDirect8x8Inference %d\n\t"
+        "bDirectSpatialTemporal %d\n\t"
+        "nCabacInitIdc %d\n\t",
+        parms.nSize,
+        parms.nVersion,    
+        parms.nPortIndex,
+        parms.nBFrames, 
+        parms.bUseHadamard,
+        parms.nRefFrames,
+	    parms.nRefIdx10ActiveMinus1,
+	    parms.nRefIdx11ActiveMinus1,
+        parms.bEnableUEP,  
+        parms.bEnableFMO,  
+        parms.bEnableASO,
+        parms.bEnableRS,
+        parms.eProfile,
+	    parms.eLevel,
+        parms.nAllowedPictureTypes,
+	    parms.bFrameMBsOnly,
+        parms.bMBAFF,
+        parms.bEntropyCodingCABAC, 
+        parms.bWeightedPPrediction,
+        parms.nWeightedBipredicitonMode,
+        parms.bconstIpred,
+        parms.bDirect8x8Inference,
+	    parms.bDirectSpatialTemporal,
+	    parms.nCabacInitIdc,
+	    parms.eLoopFilterMode);
+}
+
 static void dump_port(OMX_HANDLETYPE hComponent, OMX_U32 nPortIndex, OMX_BOOL dumpformats) {
     OMX_ERRORTYPE r;
     OMX_PARAM_PORTDEFINITIONTYPE portdef;
@@ -582,9 +637,9 @@ int main(int argc, char **argv) {
     int bit_rate = VIDEO_BITRATE;
     int opt;
     int intra_refresh = -1;
-    int disable_cabac = 0;
+    int h264profile = OMX_VIDEO_AVCProfileHigh;
 
-    while ((opt = getopt (argc, argv, "w:h:b:f:qi:d")) != -1)
+    while ((opt = getopt (argc, argv, "w:h:b:f:qi:p:")) != -1)
     {
         switch (opt)
         {
@@ -606,11 +661,20 @@ int main(int argc, char **argv) {
         case 'i':
              intra_refresh = atoi(optarg);
              break;
-        case 'd':
-             disable_cabac = 1;
-             break;
+        case 'p':
+            if (optarg)
+            {
+                if (*optarg == 'h')
+                    h264profile = OMX_VIDEO_AVCProfileHigh;
+                else if (*optarg == 'm')
+                    h264profile = OMX_VIDEO_AVCProfileMain;
+                else
+                    h264profile = OMX_VIDEO_AVCProfileBaseline;
+            }
+            break;
+
         default:
-            fprintf(stderr, "Usage: %s [-w width -h height -b bitate -f framerate -i Intra refresh rate -d disable CABAC] ", argv[0]);
+            fprintf(stderr, "Usage: %s [-w width -h height -b bitate -f framerate -i Intra refresh rate -p profile] ", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
@@ -690,6 +754,16 @@ int main(int argc, char **argv) {
         omx_die(r, "Failed to set video format for encoder output port 201");
     }
 
+    // Configure profile
+    OMX_VIDEO_PARAM_PROFILELEVELTYPE profile;
+    OMX_INIT_STRUCTURE(profile);
+    profile.nPortIndex = 201;
+    profile.eProfile = h264profile;
+    profile.eLevel = OMX_VIDEO_AVCLevel4;
+    if ((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoProfileLevelCurrent, &profile)) != OMX_ErrorNone) {
+        omx_die(r, "Failed to set the H264 profile for encoder output port 201");
+    }
+
     // Configure idr rate
     if (intra_refresh !=  -1)
     {
@@ -698,12 +772,10 @@ int main(int argc, char **argv) {
         intra.nPortIndex = 201;
         intra.nU32 = intra_refresh;
         if((r = OMX_SetParameter(ctx.encoder, OMX_IndexConfigBrcmVideoIntraPeriod, &intra)) != OMX_ErrorNone)
-            omx_die(r, "Failed to set video format for encoder output port 201");
-	   else
-	        say("jnah Successful intra set\n");
+            omx_die(r, "Failed to set intraframe rate for encoder output port 201");
     }
 
-#if 1
+#if 0
     {
         OMX_VIDEO_PARAM_PROFILELEVELTYPE param; 
  	    OMX_INIT_STRUCTURE(param); 
@@ -721,23 +793,23 @@ int main(int argc, char **argv) {
     }
 #endif
 
-
-    if (disable_cabac)
+    // Configure AVC parameters
+    // Get the current set first, then change what we need.
+    OMX_VIDEO_PARAM_AVCTYPE h264parameters;
+    OMX_INIT_STRUCTURE(h264parameters);
+    dump_avc_parameters(h264parameters);
+    h264parameters.nPortIndex = 201;
+    if ((r = OMX_GetParameter(ctx.encoder, OMX_IndexParamVideoAvc, &h264parameters)) != OMX_ErrorNone) {
+       omx_die(r, "Failed to get the H264 parameters for encoder output port 201");
+    }
+    else
     {
-        OMX_VIDEO_PARAM_PROFILELEVELTYPE profiletype;
-        OMX_INIT_STRUCTURE(profiletype);
-        profiletype.nPortIndex = 201;
-        profiletype.eProfile =  OMX_VIDEO_AVCProfileConstrainedBaseline;
-        profiletype.eLevel = OMX_VIDEO_AVCLevel4;
-        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoProfileLevelCurrent, &profiletype)) != OMX_ErrorNone)
-            omx_die(r, "Failed to set H264 profile for encoder output port 201");
-	   else
-	        say("jnah Successful H264 profile set\n");
-
-
-
-
-
+        dump_avc_parameters(h264parameters);
+        //h264parameters.bUseHadamard = 0;
+        //h264parameters.bEntropyCodingCABAC = 0;
+        if ((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoAvc, &h264parameters)) != OMX_ErrorNone) {
+           omx_die(r, "Failed to set the H264 parameters for encoder output port 201");
+        }
     }
 
     // Switch components to idle state

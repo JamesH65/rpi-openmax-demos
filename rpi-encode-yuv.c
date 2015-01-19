@@ -638,8 +638,10 @@ int main(int argc, char **argv) {
     int opt;
     int intra_refresh = -1;
     int h264profile = OMX_VIDEO_AVCProfileHigh;
+    int disable_CABAC = OMX_FALSE;
+    int low_latency = OMX_FALSE;
 
-    while ((opt = getopt (argc, argv, "w:h:b:f:qi:p:")) != -1)
+    while ((opt = getopt (argc, argv, "w:h:b:f:qi:p:cl")) != -1)
     {
         switch (opt)
         {
@@ -672,9 +674,16 @@ int main(int argc, char **argv) {
                     h264profile = OMX_VIDEO_AVCProfileBaseline;
             }
             break;
+        case 'c':
+            disable_CABAC = OMX_TRUE;
+            break;
+
+        case 'l':
+            low_latency = OMX_TRUE;
+            break;
 
         default:
-            fprintf(stderr, "Usage: %s [-w width -h height -b bitate -f framerate -i Intra refresh rate -p profile] ", argv[0]);
+            fprintf(stderr, "Usage: %s [-w width -h height -b bitate -f framerate -i Intra refresh rate -p profile -c disable CABAC -l low latency] ", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
@@ -810,6 +819,24 @@ int main(int argc, char **argv) {
         if ((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamVideoAvc, &h264parameters)) != OMX_ErrorNone) {
            omx_die(r, "Failed to set the H264 parameters for encoder output port 201");
         }
+    }
+
+    if (low_latency ==  OMX_TRUE)
+    {
+        OMX_CONFIG_BOOLEANTYPE latency;
+        OMX_INIT_STRUCTURE(latency);
+        latency.bEnabled = OMX_TRUE;
+        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexConfigBrcmVideoH264LowLatency, &latency)) != OMX_ErrorNone)
+            omx_die(r, "Failed to enable low latency for encoder");
+    }
+
+    if (disable_CABAC ==  OMX_TRUE)
+    {
+        OMX_CONFIG_BOOLEANTYPE cabac;
+        OMX_INIT_STRUCTURE(cabac);
+        cabac.bEnabled = OMX_TRUE;
+        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexConfigBrcmVideoH264DisableCABAC, &cabac)) != OMX_ErrorNone)
+            omx_die(r, "Failed to disable CABAC for encoder");
     }
 
     // Switch components to idle state

@@ -640,8 +640,13 @@ int main(int argc, char **argv) {
     int h264profile = OMX_VIDEO_AVCProfileHigh;
     int disable_CABAC = OMX_FALSE;
     int low_latency = OMX_FALSE;
+    int want_motionvectors = OMX_FALSE;
+    char *motion_filename = NULL;
+    FILE *motion_fd = NULL;
 
-    while ((opt = getopt (argc, argv, "w:h:b:f:qi:p:cl")) != -1)
+int total_mv_bytes = 0;
+
+    while ((opt = getopt (argc, argv, "w:h:b:f:qi:p:clx:")) != -1)
     {
         switch (opt)
         {
@@ -680,6 +685,11 @@ int main(int argc, char **argv) {
 
         case 'l':
             low_latency = OMX_TRUE;
+            break;
+
+        case 'x':
+            want_motionvectors = OMX_TRUE;
+            motion_filename = optarg;
             break;
 
         default:
@@ -782,6 +792,22 @@ int main(int argc, char **argv) {
         intra.nU32 = intra_refresh;
         if((r = OMX_SetParameter(ctx.encoder, OMX_IndexConfigBrcmVideoIntraPeriod, &intra)) != OMX_ErrorNone)
             omx_die(r, "Failed to set intraframe rate for encoder output port 201");
+    }
+
+    //set INLINE VECTORS flag to request motion vector estimates
+    if (want_motionvectors)
+    {
+        OMX_CONFIG_PORTBOOLEANTYPE motion;
+        OMX_INIT_STRUCTURE(motion);
+        motion.nPortIndex = 201;
+        motion.bEnabled = OMX_TRUE;
+        if((r = OMX_SetParameter(ctx.encoder, OMX_IndexParamBrcmVideoAVCInlineVectorsEnable, &motion)) != OMX_ErrorNone)
+            omx_die(r, "Failed to enable motion vectors for encoder");
+
+        // Open an output file
+        motion_fd = fopen(motion_filename, "w+");
+        if(motion_fd == NULL)
+            omx_die(r, "Failed to open motion vector output file");
     }
 
 #if 0
@@ -918,20 +944,30 @@ int main(int argc, char **argv) {
     signal(SIGTERM, signal_handler);
     signal(SIGQUIT, signal_handler);
 
-    while(1) {
+
+int num_buffs_counted = 0;
+
+
+    while(1)
+    {
         // empty_input_buffer_done_handler() has marked that there's
         // a need for a buffer to be filled by us
-        if(ctx.encoder_input_buffer_needed && input_available) {
+        if(ctx.encoder_input_buffer_needed && input_available)
+        {
             input_total_read = 0;
             memset(ctx.encoder_ppBuffer_in->pBuffer, 0, ctx.encoder_ppBuffer_in->nAllocLen);
+
             // Pack Y, U, and V plane spans read from input file to the buffer
-            for(i = 0; i < 3; i++) {
+            for(i = 0; i < 3; i++)
+            {
                 want_read = frame_info.p_stride[i] * (i == 0 ? plane_span_y : plane_span_uv);
                 input_read = fread(
                     ctx.encoder_ppBuffer_in->pBuffer + buf_info.p_offset[i],
                     1, want_read, ctx.fd_in);
                 input_total_read += input_read;
-                if(input_read != want_read) {
+
+                if(input_read != want_read)
+                {
                     ctx.encoder_ppBuffer_in->nFlags = OMX_BUFFERFLAG_EOS;
                     want_quit = 1;
                     say("Input file EOF");
@@ -941,45 +977,85 @@ int main(int argc, char **argv) {
             ctx.encoder_ppBuffer_in->nOffset = 0;
             ctx.encoder_ppBuffer_in->nFilledLen = (buf_info.size - frame_info.size) + input_total_read;
             frame_in++;
-           // say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
+           
+say("Read from input file and wrote to input buffer %d/%d, frame %d", ctx.encoder_ppBuffer_in->nFilledLen, ctx.encoder_ppBuffer_in->nAllocLen, frame_in);
+
             // Mark input unavailable also if the signal handler was triggered
-            if(want_quit) {
+            if(want_quit)
+            {
                 input_available = 0;
             }
-            if(input_total_read > 0) {
+
+            if(input_total_read > 0)
+            {
                 ctx.encoder_input_buffer_needed = 0;
-                if((r = OMX_EmptyThisBuffer(ctx.encoder, ctx.encoder_ppBuffer_in)) != OMX_ErrorNone) {
+                if((r = OMX_EmptyThisBuffer(ctx.encoder, ctx.encoder_ppBuffer_in)) != OMX_ErrorNone)
+                {
                     omx_die(r, "Failed to request emptying of the input buffer on encoder input port 200");
                 }
             }
         }
+
+
         // fill_output_buffer_done_handler() has marked that there's
         // a buffer for us to flush
-        if(ctx.encoder_output_buffer_available) {
-            if(ctx.encoder_ppBuffer_out->nFlags & OMX_BUFFERFLAG_ENDOFFRAME) {
+        if(ctx.encoder_output_buffer_available)
+        {
+
+say("Got a buffer with flag 0x%x size %d (count %d)", ctx.encoder_ppBuffer_out->nFlags, ctx.encoder_ppBuffer_out->nFilledLen, num_buffs_counted++);
+
+            if(ctx.encoder_ppBuffer_out->nFlags & OMX_BUFFERFLAG_ENDOFFRAME) 
+            {
                 frame_out++;
             }
-            // Flush buffer to output file
-            output_written = fwrite(ctx.encoder_ppBuffer_out->pBuffer + ctx.encoder_ppBuffer_out->nOffset, 1, ctx.encoder_ppBuffer_out->nFilledLen, ctx.fd_out);
-            if(output_written != ctx.encoder_ppBuffer_out->nFilledLen) {
-                die("Failed to write to output file: %s", strerror(errno));
+
+            if(ctx.encoder_ppBuffer_out->nFlags & OMX_BUFFERFLAG_CODECSIDEINFO )
+            {
+                // Write the buffer to the motion vector output file
+                if (motion_fd)
+                {
+                    output_written = fwrite(ctx.encoder_ppBuffer_out->pBuffer + ctx.encoder_ppBuffer_out->nOffset, 1, ctx.encoder_ppBuffer_out->nFilledLen, motion_fd);
+                    if(output_written != ctx.encoder_ppBuffer_out->nFilledLen)
+                        die("Failed to write to output file: %s", strerror(errno));
+
+total_mv_bytes += output_written;
+
+//say("Wrote %d to motion vector file giving total %d", output_written, total_mv_bytes);
+
+                }                
             }
-           // say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
+            else
+            {
+                // Flush buffer to output file
+                output_written = fwrite(ctx.encoder_ppBuffer_out->pBuffer + ctx.encoder_ppBuffer_out->nOffset, 1, ctx.encoder_ppBuffer_out->nFilledLen, ctx.fd_out);
+                if(output_written != ctx.encoder_ppBuffer_out->nFilledLen)
+                {
+                    die("Failed to write to output file: %s", strerror(errno));
+                }
+//say("Read from output buffer and wrote to output file %d/%d, frame %d", ctx.encoder_ppBuffer_out->nFilledLen, ctx.encoder_ppBuffer_out->nAllocLen, frame_out + 1);
+            }
         }
-        if(ctx.encoder_output_buffer_available || !frame_out) {
+
+        if(ctx.encoder_output_buffer_available || !frame_out)
+        {
             // Buffer flushed, request a new buffer to be filled by the encoder component
             ctx.encoder_output_buffer_available = 0;
-            if((r = OMX_FillThisBuffer(ctx.encoder, ctx.encoder_ppBuffer_out)) != OMX_ErrorNone) {
+            if((r = OMX_FillThisBuffer(ctx.encoder, ctx.encoder_ppBuffer_out)) != OMX_ErrorNone)
+            {
                 omx_die(r, "Failed to request filling of the output buffer on encoder output port 201");
             }
         }
+
         // Don't exit the loop until all the input frames have been encoded.
         // Out frame count is larger than in frame count because 2 header
         // frames are emitted in the beginning.
 //        if(want_quit && frame_out == frame_in) {
-        if(want_quit || frame_out == frame_in) {
+        if(want_quit || frame_out == frame_in)
+        {
+
             break;
         }
+
         // Would be better to use signaling here but hey this works too
         usleep(10);
     }
@@ -1036,6 +1112,9 @@ int main(int argc, char **argv) {
     // Exit
     fclose(ctx.fd_in);
     fclose(ctx.fd_out);
+
+    if (motion_fd)
+        fclose(motion_fd);
 
     vcos_semaphore_delete(&ctx.handler_lock);
     if((r = OMX_Deinit()) != OMX_ErrorNone) {
